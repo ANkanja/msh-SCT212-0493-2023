@@ -105,11 +105,47 @@ static int run_builtin(char **argv, int argc, int *should_exit)
 }
 
 /*
+ * If the command ends with '&' (as its own word or stuck to the last
+ * word, e.g. "sleep 3&"), remove it and return 1. Otherwise return 0.
+ */
+static int strip_background(char **argv, int *argc)
+{
+    if (*argc == 0)
+        return 0;
+
+    char *last = argv[*argc - 1];
+    size_t len = strlen(last);
+    if (len == 0 || last[len - 1] != '&')
+        return 0;
+
+    if (len == 1) {                      /* "&" was its own word */
+        argv[--(*argc)] = NULL;
+    } else {                             /* "word&" */
+        last[len - 1] = '\0';
+    }
+    return 1;
+}
+
+/*
+ * Reap every background child that has finished, without blocking.
+ * WNOHANG makes waitpid return 0 immediately if nobody is done yet,
+ * so finished jobs never linger as zombies.
+ */
+static void reap_background(void)
+{
+    int status;
+    pid_t pid;
+    while ((pid = waitpid(-1, &status, WNOHANG)) > 0)
+        printf("[done] %d (status %d)\n", (int)pid, decode_status(status));
+}
+
+/*
  * Run an external program: fork a child, replace the child with the
  * program via execvp, and make the parent wait for it with waitpid.
+ * In background mode the parent prints the PID and returns at once.
  * Returns the command's exit status.
  */
-static int run_external(char **argv)
+static int run_external(char **argv, int background)
 {
     pid_t pid = fork();
     if (pid < 0) {
@@ -126,6 +162,12 @@ static int run_external(char **argv)
         else
             fprintf(stderr, "msh: %s: %s\n", argv[0], strerror(err));
         _exit(err == ENOENT ? 127 : 126);
+    }
+
+    if (background) {
+        /* do not wait; reap_background() will collect it later */
+        printf("[bg] %d\n", (int)pid);
+        return 0;
     }
 
     /* parent: wait for this specific child to finish */
@@ -146,6 +188,7 @@ int main(void)
     int last_status = 0;
 
     for (;;) {
+        reap_background();               /* collect finished jobs first */
         printf("msh[%d]> ", last_status);
         fflush(stdout);
 
@@ -158,7 +201,8 @@ int main(void)
 
         int argc;
         char **argv = split_line(line, &argc);
-        if (argc == 0) {                     /* blank line */
+        int background = strip_background(argv, &argc);
+        if (argc == 0) {                     /* blank line (or lone "&") */
             free(argv);
             continue;
         }
@@ -166,7 +210,7 @@ int main(void)
         int should_exit = 0;
         int rc = run_builtin(argv, argc, &should_exit);
         if (rc < 0)
-            rc = run_external(argv);
+            rc = run_external(argv, background);
         last_status = rc;
         free(argv);
         if (should_exit)
