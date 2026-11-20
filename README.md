@@ -13,7 +13,7 @@ runs programs. It reads a command, starts it as a separate process with
 Needs Linux (or WSL) with `gcc` and `make`.
 
 ```sh
-git clone https://github.com/ANKanja/msh-SCT212-0493-2023.git
+git clone https://github.com/ANkanja/msh-SCT212-0493-2023.git
 cd msh-SCT212-0493-2023
 make
 ./msh
