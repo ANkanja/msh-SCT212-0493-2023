@@ -9,10 +9,34 @@
 #include <errno.h>
 #include <unistd.h>
 #include <fcntl.h>
+#include <signal.h>
 #include <sys/types.h>
 #include <sys/wait.h>
 
 #define DELIMS " \t\r\n"
+
+/*
+ * SIGINT handler for the shell itself. Ctrl-C sends SIGINT to every
+ * process in the terminal's foreground group, so the running child
+ * gets it and dies, while the shell just moves to a fresh line.
+ * Only async-signal-safe calls (write) are allowed here.
+ */
+static void on_sigint(int sig)
+{
+    (void)sig;
+    write(STDOUT_FILENO, "\n", 1);
+}
+
+static void install_sigint_handler(void)
+{
+    struct sigaction sa;
+    memset(&sa, 0, sizeof sa);
+    sa.sa_handler = on_sigint;
+    sigemptyset(&sa.sa_mask);
+    sa.sa_flags = 0;   /* no SA_RESTART: getline returns so we can re-prompt */
+    if (sigaction(SIGINT, &sa, NULL) < 0)
+        perror("msh: sigaction");
+}
 
 /*
  * Split line in place into words separated by spaces/tabs.
@@ -188,7 +212,11 @@ static int run_external(char **argv, int background, const char *outfile)
     }
 
     if (pid == 0) {
-        /* child: set up redirection here so the shell's own stdout
+        /* child: foreground jobs get default Ctrl-C behaviour (die);
+         * background jobs ignore it so Ctrl-C only hits the foreground */
+        signal(SIGINT, background ? SIG_IGN : SIG_DFL);
+
+        /* set up redirection here so the shell's own stdout
          * is never touched */
         if (outfile != NULL) {
             int fd = open(outfile, O_WRONLY | O_CREAT | O_TRUNC, 0644);
@@ -236,13 +264,22 @@ int main(void)
     size_t cap = 0;
     int last_status = 0;
 
+    install_sigint_handler();
+
     for (;;) {
         reap_background();               /* collect finished jobs first */
         printf("msh[%d]> ", last_status);
         fflush(stdout);
 
         /* getline grows the buffer as needed, so lines can be any length */
+        errno = 0;
         if (getline(&line, &cap, stdin) == -1) {
+            if (errno == EINTR) {
+                /* Ctrl-C at the prompt: discard input, prompt again */
+                clearerr(stdin);
+                last_status = 130;
+                continue;
+            }
             /* end-of-file (Ctrl-D) or read error: leave cleanly */
             putchar('\n');
             break;
