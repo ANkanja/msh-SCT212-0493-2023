@@ -118,13 +118,8 @@ If I had more time, I would add pipes and output redirection using
 
 ## Sources and AI-tool declaration
 
-<!-- TODO: check and complete this list. -->
-
-- Linux man pages: `fork(2)`, `execvp(3)`, `waitpid(2)`, `getline(3)`,
-  `strtok(3)`, `sigaction(2)`, `dup2(2)`, `open(2)`, `chdir(2)`, used to
-  check arguments, return values and error handling.
-- ICS 2305 lecture notes on processes and signals.
-- Claude (Anthropic AI assistant), used to help write and structure the
-  code step by step, review error handling, and draft this README and
-  the test plan. I tested every feature myself and recorded the results
-  in `tests/test_plan.md`.
+I used Claude (an AI assistant) to explain the system calls and process
+management, to write the shell code step by step with me (one commit per
+task), to troubleshoot issues, to run the tests on Cygwin, and to draft
+the README and test plan. I wrote the design explanation and reflection
+myself, and I made sure I understand how each part of the code works.
