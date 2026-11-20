@@ -1,7 +1,7 @@
 # msh: a minimal Unix shell
 
-**Name:** _YOUR NAME_
-**Student ID:** _YOUR STUDENT ID_
+**Name:** Austin Ngunjiri
+**Student ID:** SCT212-0493/2023
 **Course:** ICS 2305 Systems Programming, practical assignment (Question 1)
 
 `msh` is a small command-line shell written in C for teaching how Unix
@@ -13,8 +13,8 @@ runs programs. It reads a command, starts it as a separate process with
 Needs Linux (or WSL) with `gcc` and `make`.
 
 ```sh
-git clone https://github.com/YOURUSERNAME/msh-YOURSTUDENTID.git
-cd msh-YOURSTUDENTID
+git clone https://github.com/ANKanja/msh-SCT212-0493-2023.git
+cd msh-SCT212-0493-2023
 make
 ./msh
 ```
