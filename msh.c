@@ -48,15 +48,28 @@ static char **split_line(char *line, int *argc)
 }
 
 /*
+ * Convert a raw waitpid() status into a shell exit status:
+ * normal exit -> the exit code, killed by signal N -> 128 + N.
+ */
+static int decode_status(int status)
+{
+    if (WIFEXITED(status))
+        return WEXITSTATUS(status);
+    if (WIFSIGNALED(status))
+        return 128 + WTERMSIG(status);
+    return 1;
+}
+
+/*
  * Built-in commands run inside the shell process itself.
- * Returns 1 if argv[0] was a built-in (and handled), 0 otherwise.
- * Sets *should_exit when the user typed exit.
+ * Returns -1 if argv[0] is not a built-in, otherwise the command's
+ * exit status. Sets *should_exit when the user typed exit.
  */
 static int run_builtin(char **argv, int argc, int *should_exit)
 {
     if (strcmp(argv[0], "exit") == 0) {
         *should_exit = 1;
-        return 1;
+        return 0;
     }
 
     if (strcmp(argv[0], "cd") == 0) {
@@ -71,9 +84,11 @@ static int run_builtin(char **argv, int argc, int *should_exit)
             fprintf(stderr, "msh: cd: too many arguments\n");
             return 1;
         }
-        if (chdir(dir) != 0)
+        if (chdir(dir) != 0) {
             perror("msh: cd");
-        return 1;
+            return 1;
+        }
+        return 0;
     }
 
     if (strcmp(argv[0], "help") == 0) {
@@ -83,32 +98,34 @@ static int run_builtin(char **argv, int argc, int *should_exit)
                "  help       show this message\n"
                "  exit       leave the shell\n"
                "Anything else is run as an external program.\n");
-        return 1;
+        return 0;
     }
 
-    return 0;
+    return -1;
 }
 
 /*
  * Run an external program: fork a child, replace the child with the
  * program via execvp, and make the parent wait for it with waitpid.
+ * Returns the command's exit status.
  */
-static void run_external(char **argv)
+static int run_external(char **argv)
 {
     pid_t pid = fork();
     if (pid < 0) {
         perror("msh: fork");
-        return;
+        return 1;
     }
 
     if (pid == 0) {
         /* child: becomes the requested program, or exits on failure */
         execvp(argv[0], argv);
-        if (errno == ENOENT)
+        int err = errno;                 /* save before fprintf touches it */
+        if (err == ENOENT)
             fprintf(stderr, "msh: %s: command not found\n", argv[0]);
         else
-            fprintf(stderr, "msh: %s: %s\n", argv[0], strerror(errno));
-        _exit(errno == ENOENT ? 127 : 126);
+            fprintf(stderr, "msh: %s: %s\n", argv[0], strerror(err));
+        _exit(err == ENOENT ? 127 : 126);
     }
 
     /* parent: wait for this specific child to finish */
@@ -116,18 +133,20 @@ static void run_external(char **argv)
     while (waitpid(pid, &status, 0) < 0) {
         if (errno != EINTR) {
             perror("msh: waitpid");
-            return;
+            return 1;
         }
     }
+    return decode_status(status);
 }
 
 int main(void)
 {
     char *line = NULL;
     size_t cap = 0;
+    int last_status = 0;
 
     for (;;) {
-        printf("msh> ");
+        printf("msh[%d]> ", last_status);
         fflush(stdout);
 
         /* getline grows the buffer as needed, so lines can be any length */
@@ -145,8 +164,10 @@ int main(void)
         }
 
         int should_exit = 0;
-        if (!run_builtin(argv, argc, &should_exit))
-            run_external(argv);
+        int rc = run_builtin(argv, argc, &should_exit);
+        if (rc < 0)
+            rc = run_external(argv);
+        last_status = rc;
         free(argv);
         if (should_exit)
             break;
