@@ -8,6 +8,7 @@
 #include <string.h>
 #include <errno.h>
 #include <unistd.h>
+#include <fcntl.h>
 #include <sys/types.h>
 #include <sys/wait.h>
 
@@ -127,6 +128,39 @@ static int strip_background(char **argv, int *argc)
 }
 
 /*
+ * Find "> file" (or ">file") in argv, remove it, and store the file
+ * name in *outfile (NULL if there is no redirection).
+ * Returns 0 on success, -1 on a syntax error such as a missing name.
+ */
+static int parse_redirect(char **argv, int *argc, char **outfile)
+{
+    *outfile = NULL;
+    for (int i = 0; i < *argc; i++) {
+        if (argv[i][0] != '>')
+            continue;
+
+        int used;                        /* how many words to remove */
+        if (argv[i][1] != '\0') {        /* ">file" */
+            *outfile = argv[i] + 1;
+            used = 1;
+        } else if (i + 1 < *argc) {      /* "> file" */
+            *outfile = argv[i + 1];
+            used = 2;
+        } else {
+            fprintf(stderr, "msh: syntax error: expected file after '>'\n");
+            return -1;
+        }
+
+        /* shift the remaining words left over the removed ones */
+        for (int j = i; j + used <= *argc; j++)
+            argv[j] = argv[j + used];
+        *argc -= used;
+        return 0;
+    }
+    return 0;
+}
+
+/*
  * Reap every background child that has finished, without blocking.
  * WNOHANG makes waitpid return 0 immediately if nobody is done yet,
  * so finished jobs never linger as zombies.
@@ -145,7 +179,7 @@ static void reap_background(void)
  * In background mode the parent prints the PID and returns at once.
  * Returns the command's exit status.
  */
-static int run_external(char **argv, int background)
+static int run_external(char **argv, int background, const char *outfile)
 {
     pid_t pid = fork();
     if (pid < 0) {
@@ -154,7 +188,22 @@ static int run_external(char **argv, int background)
     }
 
     if (pid == 0) {
-        /* child: becomes the requested program, or exits on failure */
+        /* child: set up redirection here so the shell's own stdout
+         * is never touched */
+        if (outfile != NULL) {
+            int fd = open(outfile, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+            if (fd < 0) {
+                fprintf(stderr, "msh: %s: %s\n", outfile, strerror(errno));
+                _exit(1);
+            }
+            if (dup2(fd, STDOUT_FILENO) < 0) {
+                perror("msh: dup2");
+                _exit(1);
+            }
+            close(fd);
+        }
+
+        /* become the requested program, or exit on failure */
         execvp(argv[0], argv);
         int err = errno;                 /* save before fprintf touches it */
         if (err == ENOENT)
@@ -202,6 +251,12 @@ int main(void)
         int argc;
         char **argv = split_line(line, &argc);
         int background = strip_background(argv, &argc);
+        char *outfile;
+        if (parse_redirect(argv, &argc, &outfile) < 0) {
+            last_status = 2;
+            free(argv);
+            continue;
+        }
         if (argc == 0) {                     /* blank line (or lone "&") */
             free(argv);
             continue;
@@ -210,7 +265,7 @@ int main(void)
         int should_exit = 0;
         int rc = run_builtin(argv, argc, &should_exit);
         if (rc < 0)
-            rc = run_external(argv, background);
+            rc = run_external(argv, background, outfile);
         last_status = rc;
         free(argv);
         if (should_exit)
