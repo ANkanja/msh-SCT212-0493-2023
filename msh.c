@@ -48,6 +48,48 @@ static char **split_line(char *line, int *argc)
 }
 
 /*
+ * Built-in commands run inside the shell process itself.
+ * Returns 1 if argv[0] was a built-in (and handled), 0 otherwise.
+ * Sets *should_exit when the user typed exit.
+ */
+static int run_builtin(char **argv, int argc, int *should_exit)
+{
+    if (strcmp(argv[0], "exit") == 0) {
+        *should_exit = 1;
+        return 1;
+    }
+
+    if (strcmp(argv[0], "cd") == 0) {
+        const char *dir = argv[1];
+        if (dir == NULL) {
+            dir = getenv("HOME");
+            if (dir == NULL) {
+                fprintf(stderr, "msh: cd: HOME not set\n");
+                return 1;
+            }
+        } else if (argc > 2) {
+            fprintf(stderr, "msh: cd: too many arguments\n");
+            return 1;
+        }
+        if (chdir(dir) != 0)
+            perror("msh: cd");
+        return 1;
+    }
+
+    if (strcmp(argv[0], "help") == 0) {
+        printf("msh - minimal shell\n"
+               "Built-in commands:\n"
+               "  cd [dir]   change directory (default: $HOME)\n"
+               "  help       show this message\n"
+               "  exit       leave the shell\n"
+               "Anything else is run as an external program.\n");
+        return 1;
+    }
+
+    return 0;
+}
+
+/*
  * Run an external program: fork a child, replace the child with the
  * program via execvp, and make the parent wait for it with waitpid.
  */
@@ -102,8 +144,12 @@ int main(void)
             continue;
         }
 
-        run_external(argv);
+        int should_exit = 0;
+        if (!run_builtin(argv, argc, &should_exit))
+            run_external(argv);
         free(argv);
+        if (should_exit)
+            break;
     }
 
     free(line);
