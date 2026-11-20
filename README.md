@@ -50,45 +50,57 @@ Test results are in [tests/test_plan.md](tests/test_plan.md).
 
 ## Design explanation
 
-<!-- TODO: rewrite this section in your own words before submitting. -->
+### The fork / exec / wait cycle
 
-The main loop prints the prompt, reads one line with `getline()` and
-splits it into words with `strtok()`. The words are stored in a growing
-array of `char *` that always ends in `NULL`, because that is the form
-`execvp()` expects. Before running anything the shell removes a trailing
-`&` (background flag) and a `> file` pair (output file) from the array.
+When I type a command such as `ls -l`, `fork()` creates a child process
+that is a copy of the shell. The program knows which process is running
+through the return value: 0 means it's the child, while a positive
+number means it's the parent.
 
-If the first word is not a built-in, the shell calls `fork()`. This makes
-an almost exact copy of the shell process. In the child, `fork()` returns
-0: the child sets SIGINT back to its default action, opens the output
-file and uses `dup2()` to put it on standard output if there was a `>`,
-and then calls `execvp()`. `execvp()` searches `PATH` and replaces the
-child's program with the requested one. If it returns at all, it failed,
-so the child prints an error and exits with 127 (not found) or 126. In
-the parent, `fork()` returns the child's PID. The parent calls
-`waitpid()` on that PID until the child ends, then turns the raw status
-into a number with `WIFEXITED` / `WEXITSTATUS`, or `128 + WTERMSIG` if a
-signal killed it. That number is shown in the next prompt.
+In the child, `execvp()` replaces the child process with the `ls`
+program and executes the command. If it works, the original child code
+is replaced, so the code after `execvp()` only runs if something goes
+wrong. In that case msh prints an error and the child exits with 127,
+which is what `nosuchcommand` shows.
 
-`cd` and `exit` have to be built-ins because they change the shell
-process itself. The current directory belongs to each process. If `cd`
-were a separate program, it would change its own directory in a child
-process and then exit, and the shell's directory would not change at
-all. In the same way, an external `exit` program could only end itself,
-not the shell that started it.
+The parent waits for the child process to finish using `waitpid()`.
+Once the child finishes, the parent collects its exit status and uses
+it to display the number in the next prompt. If the child was killed by
+a signal, the status is 128 plus the signal number. For example, Ctrl-C
+sends the SIGINT signal, which has a value of 2, giving 130.
 
-A finished child stays a zombie until its parent collects its status
-with `wait`. Foreground children are collected straight away by
-`waitpid()`. For background jobs the shell does not wait. Instead,
-before every prompt it calls `waitpid(-1, &status, WNOHANG)` in a loop.
-`WNOHANG` returns at once when no child has finished, so the prompt is
-never blocked, and every finished job is reaped and reported with a
-`[done]` line.
+### Why cd and exit are built-ins
 
-Ctrl-C sends SIGINT to every process in the terminal's foreground group.
-The shell installs a handler that only prints a newline, so it survives.
-The foreground child has the default action, so it dies (status 130).
-Background children ignore SIGINT.
+If `cd` was a separate program, it would only change the directory of
+its own process, not the shell's directory. Once it finishes, the shell
+would still be in the original folder. That is why `cd` must run inside
+the shell itself using `chdir()`.
+
+`exit` would have the same problem, because it would only terminate the
+separate child process. The original shell would continue running.
+
+### Avoiding zombie processes
+
+A zombie process is a process that has finished running but whose
+parent has not yet collected its exit status. It stays in the process
+table until the parent cleans it up.
+
+Foreground commands are collected straight away by `waitpid()`. For
+background commands started with `&`, the shell does not wait. Instead,
+before every prompt it uses `waitpid()` with the `WNOHANG` option to
+check for completed background processes without waiting for them. This
+allows it to clean them up while keeping the prompt responsive.
+
+### Reflection
+
+The hardest part for me was understanding how the parent and child
+processes work together, especially how `fork()` and `execvp()`
+interact. It was also interesting to learn that a process can finish
+running but still remain in the process table as a zombie.
+
+If I had more time, I would add pipes and output redirection using
+`>>`. I would also improve command parsing to support quotes and add a
+`jobs` command for managing background processes.
 
 ## Known limitations
 
