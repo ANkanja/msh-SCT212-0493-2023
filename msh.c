@@ -24,7 +24,8 @@
 static void on_sigint(int sig)
 {
     (void)sig;
-    write(STDOUT_FILENO, "\n", 1);
+    ssize_t r = write(STDOUT_FILENO, "\n", 1);
+    (void)r;                             /* nothing useful to do on error */
 }
 
 static void install_sigint_handler(void)
