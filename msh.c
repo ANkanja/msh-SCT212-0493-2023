@@ -6,6 +6,10 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <errno.h>
+#include <unistd.h>
+#include <sys/types.h>
+#include <sys/wait.h>
 
 #define DELIMS " \t\r\n"
 
@@ -43,6 +47,38 @@ static char **split_line(char *line, int *argc)
     return argv;
 }
 
+/*
+ * Run an external program: fork a child, replace the child with the
+ * program via execvp, and make the parent wait for it with waitpid.
+ */
+static void run_external(char **argv)
+{
+    pid_t pid = fork();
+    if (pid < 0) {
+        perror("msh: fork");
+        return;
+    }
+
+    if (pid == 0) {
+        /* child: becomes the requested program, or exits on failure */
+        execvp(argv[0], argv);
+        if (errno == ENOENT)
+            fprintf(stderr, "msh: %s: command not found\n", argv[0]);
+        else
+            fprintf(stderr, "msh: %s: %s\n", argv[0], strerror(errno));
+        _exit(errno == ENOENT ? 127 : 126);
+    }
+
+    /* parent: wait for this specific child to finish */
+    int status;
+    while (waitpid(pid, &status, 0) < 0) {
+        if (errno != EINTR) {
+            perror("msh: waitpid");
+            return;
+        }
+    }
+}
+
 int main(void)
 {
     char *line = NULL;
@@ -66,10 +102,7 @@ int main(void)
             continue;
         }
 
-        /* temporary: show the parsed words */
-        for (int i = 0; i < argc; i++)
-            printf("argv[%d] = '%s'\n", i, argv[i]);
-
+        run_external(argv);
         free(argv);
     }
 
